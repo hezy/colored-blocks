@@ -1,7 +1,6 @@
 import pygame
 import random
 import sys
-from typing import List, Tuple
 
 pygame.init()
 pygame.mixer.init()
@@ -17,85 +16,80 @@ SCREEN_HEIGHT = GRID_HEIGHT * BLOCK_SIZE + 50
 COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255)]
 
 
-class Block:
-    def __init__(self, x: int, y: int, color: Tuple[int, int, int]):
-        self.x = x
-        self.y = y
-        self.color = color
+def create_piece(x):
+    blocks = []
+    colors = [random.choice(COLORS) for _ in range(3)]
+    for i in range(3):
+        blocks.append((x, i, colors[i]))
+    return blocks, 0, blocks[1]
 
 
-class Piece:
-    def __init__(self, x: int):
-        self.blocks = []
-        colors = [random.choice(COLORS) for _ in range(3)]
-        for i in range(3):
-            self.blocks.append(Block(x, i, colors[i]))
-        self.orientation = 0
-        self.center_block = self.blocks[1]
+def rotate_piece(blocks, orientation, grid):
+    new_blocks = []
+    new_orientation = (orientation + 1) % 4
 
-    def rotate(self, grid: List[List[Block]]):
-        new_blocks = []
-        self.orientation = (self.orientation + 1) % 4
+    if new_orientation % 2 == 1:
+        offsets = (
+            [(-1, 0), (0, 0), (1, 0)]
+            if new_orientation == 1
+            else [(1, 0), (0, 0), (-1, 0)]
+        )
+    else:
+        offsets = (
+            [(0, -1), (0, 0), (0, 1)]
+            if new_orientation == 0
+            else [(0, 1), (0, 0), (0, -1)]
+        )
 
-        if self.orientation % 2 == 1:
-            offsets = (
-                [(-1, 0), (0, 0), (1, 0)]
-                if self.orientation == 1
-                else [(1, 0), (0, 0), (-1, 0)]
-            )
-        else:
-            offsets = (
-                [(0, -1), (0, 0), (0, 1)]
-                if self.orientation == 0
-                else [(0, 1), (0, 0), (0, -1)]
-            )
+    center_x, center_y, _ = blocks[1]
+    for dx, dy in offsets:
+        new_x = center_x + dx
+        new_y = center_y + dy
 
-        center_x, center_y = self.center_block.x, self.center_block.y
-        for i, (dx, dy) in enumerate(offsets):
-            new_x = center_x + dx
-            new_y = center_y + dy
-
-            if (
-                not (0 <= new_x < GRID_WIDTH and 0 <= new_y < GRID_HEIGHT)
-                or grid[new_y][new_x]
-            ):
-                return
-            new_blocks.append(Block(new_x, new_y, self.blocks[i].color))
-
-        self.blocks = new_blocks
-
-    def move(self, dx: int, grid: List[List[Block]]):
-        new_positions = [(block.x + dx, block.y) for block in self.blocks]
-        if all(
-            0 <= x < GRID_WIDTH and not grid[y][x] for x, y in new_positions
+        if (
+            not (0 <= new_x < GRID_WIDTH and 0 <= new_y < GRID_HEIGHT)
+            or grid[new_y][new_x]
         ):
-            for block, (new_x, _) in zip(self.blocks, new_positions):
-                block.x = new_x
-            self.center_block = self.blocks[1]
+            return blocks, orientation
+        new_blocks.append((new_x, new_y, None))
 
-    def fall(self, grid: List[List[Block]], fast: bool = False) -> bool:
-        falling_blocks = sorted(self.blocks.copy(), key=lambda b: -b.y)
-        any_falling = False
-        will_land = True
+    for i, (x, y, _) in enumerate(new_blocks):
+        new_blocks[i] = (x, y, blocks[i][2])
 
-        for block in falling_blocks:
-            if block.y + 1 < GRID_HEIGHT and not grid[block.y + 1][block.x]:
-                block.y += 1
-                any_falling = True
-                will_land = False
-            else:
-                grid[block.y][block.x] = block
-
-        if will_land and not any_falling:
-            landing_sound.play()
-
-        if fast and any_falling:
-            return self.fall(grid, fast)
-
-        return any_falling
+    return new_blocks, new_orientation, new_blocks[1]
 
 
-def settle_blocks(grid: List[List[Block]]):
+def move_piece(blocks, dx, grid):
+    new_positions = [(x + dx, y) for x, y, _ in blocks]
+    if all(0 <= x < GRID_WIDTH and not grid[y][x] for x, y in new_positions):
+        for i, (new_x, y) in enumerate(new_positions):
+            blocks[i] = (new_x, y, blocks[i][2])
+    return blocks
+
+
+def fall_piece(blocks, grid, fast=False):
+    falling_blocks = sorted(blocks.copy(), key=lambda b: -b[1])
+    any_falling = False
+    will_land = True
+
+    for i, (x, y, color) in enumerate(falling_blocks):
+        if y + 1 < GRID_HEIGHT and not grid[y + 1][x]:
+            falling_blocks[i] = (x, y + 1, color)
+            any_falling = True
+            will_land = False
+        else:
+            grid[y][x] = color
+
+    if will_land and not any_falling:
+        landing_sound.play()
+
+    if fast and any_falling:
+        return fall_piece(falling_blocks, grid, fast)
+
+    return falling_blocks, any_falling
+
+
+def settle_blocks(grid):
     settled = False
     while not settled:
         settled = True
@@ -107,50 +101,34 @@ def settle_blocks(grid: List[List[Block]]):
                     settled = False
 
 
-def check_matches(grid: List[List[Block]]) -> int:
+def check_matches(grid):
     matches = set()
 
     # Horizontal and vertical matches
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH - 2):
             if grid[y][x] and grid[y][x + 1] and grid[y][x + 2]:
-                if (
-                    grid[y][x].color
-                    == grid[y][x + 1].color
-                    == grid[y][x + 2].color
-                ):
+                if grid[y][x] == grid[y][x + 1] == grid[y][x + 2]:
                     matches.update([(y, x), (y, x + 1), (y, x + 2)])
 
     for y in range(GRID_HEIGHT - 2):
         for x in range(GRID_WIDTH):
             if grid[y][x] and grid[y + 1][x] and grid[y + 2][x]:
-                if (
-                    grid[y][x].color
-                    == grid[y + 1][x].color
-                    == grid[y + 2][x].color
-                ):
+                if grid[y][x] == grid[y + 1][x] == grid[y + 2][x]:
                     matches.update([(y, x), (y + 1, x), (y + 2, x)])
 
     # Diagonal matches (down-right)
     for y in range(GRID_HEIGHT - 2):
         for x in range(GRID_WIDTH - 2):
             if grid[y][x] and grid[y + 1][x + 1] and grid[y + 2][x + 2]:
-                if (
-                    grid[y][x].color
-                    == grid[y + 1][x + 1].color
-                    == grid[y + 2][x + 2].color
-                ):
+                if grid[y][x] == grid[y + 1][x + 1] == grid[y + 2][x + 2]:
                     matches.update([(y, x), (y + 1, x + 1), (y + 2, x + 2)])
 
     # Diagonal matches (up-right)
     for y in range(2, GRID_HEIGHT):
         for x in range(GRID_WIDTH - 2):
             if grid[y][x] and grid[y - 1][x + 1] and grid[y - 2][x + 2]:
-                if (
-                    grid[y][x].color
-                    == grid[y - 1][x + 1].color
-                    == grid[y - 2][x + 2].color
-                ):
+                if grid[y][x] == grid[y - 1][x + 1] == grid[y - 2][x + 2]:
                     matches.update([(y, x), (y - 1, x + 1), (y - 2, x + 2)])
 
     if matches:
@@ -171,7 +149,7 @@ def main():
     font = pygame.font.Font(None, 36)
 
     grid = [[None for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
-    current_piece = Piece(GRID_WIDTH // 2)
+    blocks, orientation, center_block = create_piece(GRID_WIDTH // 2)
     fall_time = 0
     fall_speed = 500
 
@@ -183,18 +161,21 @@ def main():
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_LEFT:
-                    current_piece.move(-1, grid)
+                    blocks = move_piece(blocks, -1, grid)
                 elif event.key == pygame.K_RIGHT:
-                    current_piece.move(1, grid)
+                    blocks = move_piece(blocks, 1, grid)
                 elif event.key == pygame.K_UP:
-                    current_piece.rotate(grid)
+                    blocks, orientation, center_block = rotate_piece(
+                        blocks, orientation, grid
+                    )
                 elif event.key == pygame.K_DOWN:
-                    current_piece.fall(grid, fast=True)
+                    blocks, _ = fall_piece(blocks, grid, fast=True)
                     fall_time = pygame.time.get_ticks()
 
         current_time = pygame.time.get_ticks()
         if current_time - fall_time > fall_speed:
-            if not current_piece.fall(grid):
+            blocks, falling = fall_piece(blocks, grid)
+            if not falling:
                 while True:
                     settle_blocks(grid)
                     matched = check_matches(grid)
@@ -202,7 +183,9 @@ def main():
                         break
                     score += matched
 
-                current_piece = Piece(GRID_WIDTH // 2)
+                blocks, orientation, center_block = create_piece(
+                    GRID_WIDTH // 2
+                )
 
                 if any(grid[0][x] for x in range(GRID_WIDTH)):
                     pygame.quit()
@@ -217,7 +200,7 @@ def main():
                 if grid[y][x]:
                     pygame.draw.rect(
                         screen,
-                        grid[y][x].color,
+                        grid[y][x],
                         (
                             x * BLOCK_SIZE,
                             y * BLOCK_SIZE,
@@ -226,13 +209,13 @@ def main():
                         ),
                     )
 
-        for block in current_piece.blocks:
+        for x, y, color in blocks:
             pygame.draw.rect(
                 screen,
-                block.color,
+                color,
                 (
-                    block.x * BLOCK_SIZE,
-                    block.y * BLOCK_SIZE,
+                    x * BLOCK_SIZE,
+                    y * BLOCK_SIZE,
                     BLOCK_SIZE,
                     BLOCK_SIZE,
                 ),
